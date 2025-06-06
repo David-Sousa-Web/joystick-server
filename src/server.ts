@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import http from 'http';
 import { env } from "./env";
 import { Server } from 'socket.io';
-import { setupSocket } from './config/socket';
+import { setupSocket } from './conection/socket';
 
 const app = express();
 const server = http.createServer(app);
