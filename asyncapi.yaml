@@ -1,0 +1,389 @@
+asyncapi: '2.6.0'
+
+info:
+  title: Joystick WebSocket Server
+  version: '1.0.0'
+  description: |
+    Servidor WebSocket para jogos multiplayer (Pong e Galaga).
+    Usa Socket.IO com namespaces separados para Host e Client de cada jogo.
+    O servidor funciona como relay entre o Host (totem/jogo) e os Clients (celulares/controles).
+
+servers:
+  development:
+    url: localhost:3000
+    protocol: wss
+    description: Servidor local de desenvolvimento
+
+channels:
+
+  # ═══════════════════════════════════════════════
+  # PONG
+  # ═══════════════════════════════════════════════
+
+  /pong/host:
+    description: Namespace do Host (Totem) do Pong. O jogo conecta aqui para criar salas e receber inputs dos jogadores.
+    subscribe:
+      operationId: pongHostReceive
+      summary: Eventos que o Host recebe do servidor
+      message:
+        oneOf:
+          - $ref: '#/components/messages/RoomCreated'
+          - $ref: '#/components/messages/PlayerJoined'
+          - $ref: '#/components/messages/GameReady'
+          - $ref: '#/components/messages/PlayerLeft'
+          - $ref: '#/components/messages/ReceiveMessage'
+          - $ref: '#/components/messages/ReceiveInput'
+          - $ref: '#/components/messages/Error'
+    publish:
+      operationId: pongHostSend
+      summary: Eventos que o Host envia ao servidor
+      message:
+        oneOf:
+          - $ref: '#/components/messages/CreateRoom'
+          - $ref: '#/components/messages/SendToPlayer'
+          - $ref: '#/components/messages/SendToAll'
+
+  /pong/client:
+    description: Namespace dos jogadores do Pong. Os celulares/controles conectam aqui. Requer 2 jogadores para iniciar.
+    subscribe:
+      operationId: pongClientReceive
+      summary: Eventos que o Client recebe do servidor
+      message:
+        oneOf:
+          - $ref: '#/components/messages/JoinedRoom'
+          - $ref: '#/components/messages/GameMessage'
+          - $ref: '#/components/messages/RoomFull'
+          - $ref: '#/components/messages/Error'
+    publish:
+      operationId: pongClientSend
+      summary: Eventos que o Client envia ao servidor
+      message:
+        oneOf:
+          - $ref: '#/components/messages/JoinRoom'
+          - $ref: '#/components/messages/SendMessage'
+          - $ref: '#/components/messages/SendInput'
+
+  # ═══════════════════════════════════════════════
+  # GALAGA
+  # ═══════════════════════════════════════════════
+
+  /galaga/host:
+    description: Namespace do Host (Totem) do Galaga. Mesma interface do Pong.
+    subscribe:
+      operationId: galagaHostReceive
+      summary: Eventos que o Host recebe do servidor
+      message:
+        oneOf:
+          - $ref: '#/components/messages/RoomCreated'
+          - $ref: '#/components/messages/PlayerJoined'
+          - $ref: '#/components/messages/GameReady'
+          - $ref: '#/components/messages/PlayerLeft'
+          - $ref: '#/components/messages/ReceiveMessage'
+          - $ref: '#/components/messages/ReceiveInput'
+          - $ref: '#/components/messages/Error'
+    publish:
+      operationId: galagaHostSend
+      summary: Eventos que o Host envia ao servidor
+      message:
+        oneOf:
+          - $ref: '#/components/messages/CreateRoom'
+          - $ref: '#/components/messages/SendToPlayer'
+          - $ref: '#/components/messages/SendToAll'
+
+  /galaga/client:
+    description: Namespace dos jogadores do Galaga. Aceita 1 ou 2 jogadores (game-ready emitido com 1).
+    subscribe:
+      operationId: galagaClientReceive
+      summary: Eventos que o Client recebe do servidor
+      message:
+        oneOf:
+          - $ref: '#/components/messages/JoinedRoom'
+          - $ref: '#/components/messages/GameMessage'
+          - $ref: '#/components/messages/RoomFull'
+          - $ref: '#/components/messages/Error'
+    publish:
+      operationId: galagaClientSend
+      summary: Eventos que o Client envia ao servidor
+      message:
+        oneOf:
+          - $ref: '#/components/messages/JoinRoom'
+          - $ref: '#/components/messages/SendMessage'
+          - $ref: '#/components/messages/SendInput'
+
+components:
+  messages:
+
+    # ─── Host sends ───
+
+    CreateRoom:
+      name: create-room
+      title: Criar Sala
+      summary: Host cria uma nova sala de jogo
+      payload:
+        type: object
+        required: [roomId]
+        properties:
+          roomId:
+            type: string
+            description: ID único da sala
+            example: "sala-01"
+
+    SendToPlayer:
+      name: send-to-player
+      title: Enviar para Jogador
+      summary: Host envia mensagem para um jogador específico
+      payload:
+        type: object
+        required: [playerId, dataType]
+        properties:
+          playerId:
+            type: string
+            description: Socket ID do jogador destino
+          dataType:
+            type: string
+            description: Tipo da mensagem do jogo
+            enum: [NameValid, Started, Die, Ranking, PlayersReady, Reset, ConnectFail]
+          jsonData:
+            type: string
+            description: Dados serializados em JSON (opcional)
+
+    SendToAll:
+      name: send-to-all
+      title: Broadcast para Todos
+      summary: Host envia mensagem para todos os jogadores da sala
+      payload:
+        type: object
+        required: [roomId, dataType]
+        properties:
+          roomId:
+            type: string
+            description: ID da sala
+          dataType:
+            type: string
+            description: Tipo da mensagem do jogo
+            enum: [Started, Die, Reset]
+          jsonData:
+            type: string
+            description: Dados serializados em JSON (opcional)
+
+    # ─── Client sends ───
+
+    JoinRoom:
+      name: join-room
+      title: Entrar na Sala
+      summary: Jogador entra em uma sala existente
+      payload:
+        type: object
+        required: [roomId]
+        properties:
+          roomId:
+            type: string
+            description: ID da sala para entrar
+            example: "sala-01"
+
+    SendMessage:
+      name: send-message
+      title: Enviar Mensagem ao Host
+      summary: Jogador envia mensagem de jogo para o Host via relay
+      payload:
+        type: object
+        required: [roomId, dataType]
+        properties:
+          roomId:
+            type: string
+          dataType:
+            type: string
+            description: Tipo da mensagem do jogo
+            enum: [PlayerName, Start]
+          jsonData:
+            type: string
+            description: Dados (ex. nome do jogador)
+
+    SendInput:
+      name: send-input
+      title: Enviar Input/Coordenadas
+      summary: Jogador envia coordenadas do joystick para o Host
+      payload:
+        type: object
+        required: [roomId, x, y]
+        properties:
+          roomId:
+            type: string
+          x:
+            type: number
+            description: Coordenada X do joystick
+            example: 0.5
+          y:
+            type: number
+            description: Coordenada Y do joystick
+            example: -0.3
+          buttons:
+            type: object
+            description: Estado dos botões (ex. { "fire" true })
+            additionalProperties:
+              type: boolean
+
+    # ─── Server emits to Host ───
+
+    RoomCreated:
+      name: room-created
+      title: Sala Criada
+      summary: Confirmação de que a sala foi criada com sucesso
+      payload:
+        type: object
+        properties:
+          roomId:
+            type: string
+
+    PlayerJoined:
+      name: player-joined
+      title: Jogador Entrou
+      summary: Notifica o Host que um jogador entrou na sala
+      payload:
+        type: object
+        properties:
+          playerId:
+            type: string
+            description: Socket ID do jogador
+          playerNumber:
+            type: integer
+            description: Número do jogador (1 ou 2)
+            enum: [1, 2]
+          totalPlayers:
+            type: integer
+            description: Total de jogadores na sala
+
+    GameReady:
+      name: game-ready
+      title: Jogo Pronto
+      summary: Sala atingiu o mínimo de jogadores (Pong = 2, Galaga = 1)
+      payload:
+        type: object
+        properties:
+          roomId:
+            type: string
+          players:
+            type: integer
+            description: Número de jogadores conectados
+
+    PlayerLeft:
+      name: player-left
+      title: Jogador Saiu
+      summary: Notifica o Host que um jogador desconectou
+      payload:
+        type: object
+        properties:
+          playerId:
+            type: string
+            description: Socket ID do jogador que saiu
+          playerNumber:
+            type: integer
+            description: Número do jogador que saiu
+          totalPlayers:
+            type: integer
+            description: Jogadores restantes na sala
+          roomId:
+            type: string
+
+    ReceiveMessage:
+      name: receive-message
+      title: Mensagem do Jogador
+      summary: Host recebe mensagem de jogo de um jogador
+      payload:
+        type: object
+        properties:
+          from:
+            type: string
+            description: Socket ID do jogador
+          playerNumber:
+            type: integer
+          dataType:
+            type: string
+          jsonData:
+            type: string
+
+    ReceiveInput:
+      name: receive-input
+      title: Input do Jogador
+      summary: Host recebe coordenadas/input de um jogador
+      payload:
+        type: object
+        properties:
+          from:
+            type: string
+          playerNumber:
+            type: integer
+          x:
+            type: number
+          y:
+            type: number
+          buttons:
+            type: object
+            additionalProperties:
+              type: boolean
+
+    # ─── Server emits to Client ───
+
+    JoinedRoom:
+      name: joined-room
+      title: Entrou na Sala
+      summary: Confirmação de que o jogador entrou na sala
+      payload:
+        type: object
+        properties:
+          roomId:
+            type: string
+          playerNumber:
+            type: integer
+            description: Número atribuído ao jogador (1 ou 2)
+
+    GameMessage:
+      name: game-message
+      title: Mensagem do Jogo
+      summary: Mensagem genérica do jogo enviada pelo Host via relay
+      payload:
+        type: object
+        required: [dataType]
+        properties:
+          dataType:
+            type: string
+            description: Tipo da mensagem
+            enum: [ID, NameValid, ConnectFail, PlayersReady, Ranking, Started, Die, Reset]
+          jsonData:
+            type: string
+            description: Dados da mensagem (formato depende do dataType)
+      examples:
+        - name: Conexão aceita
+          payload:
+            dataType: "ID"
+            jsonData: "1"
+        - name: Nome válido
+          payload:
+            dataType: "NameValid"
+            jsonData: "true"
+        - name: Sala cheia
+          payload:
+            dataType: "ConnectFail"
+            jsonData: "MaxPlayers"
+        - name: Ranking
+          payload:
+            dataType: "Ranking"
+            jsonData: '{"points": 1500, "position": 3}'
+
+    RoomFull:
+      name: room-full
+      title: Sala Cheia
+      summary: A sala já atingiu o número máximo de jogadores
+      payload:
+        type: object
+        properties:
+          roomId:
+            type: string
+
+    Error:
+      name: error
+      title: Erro
+      summary: Mensagem de erro genérica
+      payload:
+        type: string
+        example: "Sala não encontrada."
