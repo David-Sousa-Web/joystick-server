@@ -1,8 +1,11 @@
+import { WebSocket } from "ws";
+
 export type GameType = 'pong' | 'galaga';
 
 interface PlayerInfo {
   socketId: string;
   playerNumber: number;
+  ws?: WebSocket;
 }
 
 export class GameRoom {
@@ -12,6 +15,7 @@ export class GameRoom {
   readonly maxPlayers: number;
 
   hostSocketId: string;
+  hostWs?: WebSocket;
   players: Map<string, PlayerInfo> = new Map();
 
   constructor(roomId: string, gameType: GameType, hostSocketId: string) {
