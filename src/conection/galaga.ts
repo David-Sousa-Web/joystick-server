@@ -7,12 +7,13 @@ interface WsMessage {
   [key: string]: any;
 }
 
-function send(ws: WebSocket, data: WsMessage) {
+function send(ws: WebSocket, data: any) {
   if (ws.readyState === WebSocket.OPEN) {
-    console.log(`[Galaga] ⬆ ENVIANDO:`, JSON.stringify(data));
-    ws.send(JSON.stringify(data));
+    const json = JSON.stringify(data);
+    console.log(`[Galaga] ⬆ ENVIANDO:`, json);
+    ws.send(json);
   } else {
-    console.log(`[Galaga] ⚠ WebSocket não está aberto, mensagem descartada:`, JSON.stringify(data));
+    console.log(`[Galaga] ⚠ WebSocket não está aberto, mensagem descartada`);
   }
 }
 
@@ -34,17 +35,15 @@ export function setupGalaga(server: http.Server) {
 
   // ═══════════════════════════════════════
   // HOST — ws://host:port/galaga/host?roomId=xxx
-  // Room is auto-created on connection
   // ═══════════════════════════════════════
   hostWss.on("connection", (ws, request) => {
-    const socketId = crypto.randomUUID();
     const roomId = getRoomIdFromUrl(request.url);
 
-    console.log(`[Galaga/Host] 🟢 Host conectado: ${socketId}`);
-    console.log(`[Galaga/Host] 🏠 roomId da URL: "${roomId}"`);
+    console.log(`[Galaga/Host] 🟢 Host conectado`);
+    console.log(`[Galaga/Host] 🏠 roomId: "${roomId}"`);
 
     if (!roomId) {
-      console.log(`[Galaga/Host] ❌ roomId não informado na URL! Use: /galaga/host?roomId=xxx`);
+      console.log(`[Galaga/Host] ❌ roomId não informado!`);
       send(ws, { type: "error", message: "roomId não informado. Use: /galaga/host?roomId=xxx" });
       ws.close();
       return;
@@ -57,69 +56,90 @@ export function setupGalaga(server: http.Server) {
       return;
     }
 
-    // Auto-create room
-    const room = new GameRoom(roomId, "galaga", socketId);
+    // Auto-create room (hostSocketId not important here)
+    const room = new GameRoom(roomId, "galaga", "host");
     room.hostWs = ws;
     rooms.set(roomId, room);
 
-    console.log(`[Galaga/Host] ✅ Sala "${roomId}" criada automaticamente`);
+    console.log(`[Galaga/Host] ✅ Sala "${roomId}" criada`);
     console.log(`[Galaga/Host] 📊 Total de salas ativas: ${rooms.size}`);
-    send(ws, { type: "room-created", roomId });
 
     ws.on("message", (raw) => {
       const rawStr = raw.toString();
-      console.log(`[Galaga/Host] ⬇ RECEBIDO de ${socketId}:`, rawStr);
+      console.log(`[Galaga/Host] ⬇ RECEBIDO:`, rawStr);
 
       let msg: WsMessage;
       try {
         msg = JSON.parse(rawStr);
       } catch (e) {
-        console.log(`[Galaga/Host] ❌ JSON inválido de ${socketId}:`, rawStr);
+        console.log(`[Galaga/Host] ❌ JSON inválido:`, rawStr);
         return;
       }
 
       console.log(`[Galaga/Host] 📨 Tipo: "${msg.type}"`);
 
-      if (msg.type === "send-to-player") {
-        const { playerId, dataType, jsonData } = msg;
-        console.log(`[Galaga/Host] 📤 Host enviando para jogador ${playerId}: dataType="${dataType}", jsonData="${jsonData}"`);
+      // Host is ready and sets maxPlayers
+      if (msg.type === "hostReady") {
+        if (msg.maxPlayers) {
+          room.setMaxPlayers(msg.maxPlayers);
+          console.log(`[Galaga/Host] ✅ Host pronto. maxPlayers=${msg.maxPlayers}`);
+        }
+        send(ws, { type: "room-created", roomId });
+      }
+
+      // Host sends data to a specific player by relay ID
+      if (msg.type === "sendToPlayer") {
+        const playerId = String(msg.playerId);
+        console.log(`[Galaga/Host] 📤 Enviando para jogador ${playerId}: "${msg.data}"`);
 
         const player = room.getPlayer(playerId);
         if (player?.ws) {
           console.log(`[Galaga/Host] ✅ Jogador encontrado (player #${player.playerNumber})`);
-          send(player.ws, { type: "game-message", dataType, jsonData });
+          // Send raw data string, exactly as the C# game sends
+          player.ws.send(msg.data);
         } else {
-          console.log(`[Galaga/Host] ⚠ Jogador ${playerId} NÃO encontrado na sala`);
+          console.log(`[Galaga/Host] ⚠ Jogador ${playerId} NÃO encontrado`);
         }
       }
 
-      if (msg.type === "send-to-all") {
-        console.log(`[Galaga/Host] 📢 Broadcast para sala "${roomId}" (${room.playerCount()} jogadores): dataType="${msg.dataType}"`);
-        for (const [playerId, player] of room.players) {
+      // Host broadcasts to all players
+      if (msg.type === "sendToAll") {
+        console.log(`[Galaga/Host] 📢 Broadcast (${room.playerCount()} jogadores): "${msg.data}"`);
+        for (const [, player] of room.players) {
           if (player.ws) {
-            console.log(`[Galaga/Host]   → Enviando para jogador #${player.playerNumber} (${playerId})`);
-            send(player.ws, { type: "game-message", dataType: msg.dataType, jsonData: msg.jsonData });
+            // Send raw data string
+            player.ws.send(msg.data);
           }
+        }
+      }
+
+      // Host disconnects a specific player
+      if (msg.type === "disconnectPlayer") {
+        const playerId = String(msg.playerId);
+        console.log(`[Galaga/Host] 🔌 Host solicitou desconexão do jogador ${playerId}`);
+        const player = room.getPlayer(playerId);
+        if (player?.ws) {
+          player.ws.close();
         }
       }
     });
 
     ws.on("close", (code, reason) => {
-      console.log(`[Galaga/Host] 🔴 Host desconectado: ${socketId} (code: ${code}, reason: ${reason.toString() || "N/A"})`);
-      console.log(`[Galaga/Host] 🗑 Fechando sala "${roomId}" (${room.playerCount()} jogadores serão notificados)`);
+      console.log(`[Galaga/Host] 🔴 Host desconectado (code: ${code})`);
+      console.log(`[Galaga/Host] 🗑 Fechando sala "${roomId}"`);
 
-      for (const [playerId, player] of room.players) {
+      for (const [, player] of room.players) {
         if (player.ws) {
-          console.log(`[Galaga/Host]   → Notificando jogador #${player.playerNumber} (${playerId}) sobre Reset`);
-          send(player.ws, { type: "game-message", dataType: "Reset", jsonData: "Host desconectou" });
+          // Send Reset as raw string (like the C# code does with SendForAllClient("Reset"))
+          player.ws.send("Reset");
         }
       }
       rooms.delete(roomId);
-      console.log(`[Galaga/Host] ✅ Sala "${roomId}" removida. Salas ativas: ${rooms.size}`);
+      console.log(`[Galaga/Host] ✅ Sala removida. Salas ativas: ${rooms.size}`);
     });
 
     ws.on("error", (err) => {
-      console.log(`[Galaga/Host] ❌ ERRO no WebSocket do host ${socketId}:`, err.message);
+      console.log(`[Galaga/Host] ❌ ERRO:`, err.message);
     });
   });
 
@@ -128,10 +148,8 @@ export function setupGalaga(server: http.Server) {
   // Auto-joins the first available room
   // ═══════════════════════════════════════
   clientWss.on("connection", (ws, request) => {
-    const socketId = crypto.randomUUID();
-
-    console.log(`[Galaga/Client] 🟢 Client conectado: ${socketId}`);
-    console.log(`[Galaga/Client] � Procurando sala disponível... (${rooms.size} salas ativas)`);
+    console.log(`[Galaga/Client] 🟢 Client conectado`);
+    console.log(`[Galaga/Client] 🔍 Procurando sala disponível...`);
 
     // Find first room with space
     let room: GameRoom | null = null;
@@ -146,115 +164,78 @@ export function setupGalaga(server: http.Server) {
 
     if (!room || !roomId) {
       console.log(`[Galaga/Client] ❌ Nenhuma sala disponível`);
-      send(ws, { type: "error", message: "Nenhuma sala disponível. Aguarde o host criar uma sala." });
+      send(ws, { type: "error", message: "Nenhuma sala disponível." });
       ws.close();
       return;
     }
 
-    console.log(`[Galaga/Client] ✅ Sala encontrada: "${roomId}" (${room.playerCount()}/${room.maxPlayers})`);
+    // Find lowest available ID (0, 1, 2...) not already taken
+    let playerId = 0;
+    while (room.getPlayer(String(playerId))) {
+      playerId++;
+    }
+    const playerIdStr = String(playerId);
 
-    // Auto-join the found room
-    const player = room.addPlayer(socketId);
+    console.log(`[Galaga/Client] 🎯 playerId atribuído: ${playerId}`);
+    console.log(`[Galaga/Client] 📊 Sala "${roomId}": ${room.playerCount()}/${room.maxPlayers}`);
+
+    // Add player with integer ID as string key
+    const player = room.addPlayer(playerIdStr);
     if (!player) {
-      console.log(`[Galaga/Client] ❌ Falha ao adicionar jogador na sala "${roomId}"`);
-      send(ws, { type: "error", message: "Não foi possível entrar na sala." });
+      console.log(`[Galaga/Client] ❌ Falha ao entrar na sala`);
       ws.close();
       return;
     }
 
     player.ws = ws;
 
-    console.log(`[Galaga/Client] ✅ Jogador #${player.playerNumber} (${socketId}) entrou automaticamente na sala "${roomId}"`);
-    console.log(`[Galaga/Client] 📊 Sala "${roomId}": ${room.playerCount()}/${room.maxPlayers} jogadores`);
+    console.log(`[Galaga/Client] ✅ Jogador ${playerId} entrou na sala "${roomId}" (${room.playerCount()}/${room.maxPlayers})`);
 
-    send(ws, { type: "joined-room", roomId, playerNumber: player.playerNumber });
-    send(ws, { type: "game-message", dataType: "ID", jsonData: String(player.playerNumber) });
-
-    // Notify host
+    // Notify host: playerConnected (matching C# HostClient protocol)
     if (room.hostWs) {
-      console.log(`[Galaga/Client] 📤 Notificando host sobre player-joined`);
+      console.log(`[Galaga/Client] 📤 Notificando host: playerConnected`);
       send(room.hostWs, {
-        type: "player-joined",
-        playerId: socketId,
-        playerNumber: player.playerNumber,
-        totalPlayers: room.playerCount(),
+        type: "playerConnected",
+        playerId: playerId,
       });
-
-      if (room.isReady()) {
-        console.log(`[Galaga/Client] 🎮 Sala "${roomId}" está PRONTA! (${room.playerCount()} jogadores, mínimo: ${room.minPlayers})`);
-        send(room.hostWs, { type: "game-ready", roomId, players: room.playerCount() });
-      }
     }
 
+    // Client sends messages (raw strings or JSON) to relay to host
     ws.on("message", (raw) => {
       const rawStr = raw.toString();
-      console.log(`[Galaga/Client] ⬇ RECEBIDO de ${socketId}:`, rawStr);
+      console.log(`[Galaga/Client] ⬇ RECEBIDO de jogador ${playerId}:`, rawStr);
 
-      let msg: WsMessage;
-      try {
-        msg = JSON.parse(rawStr);
-      } catch (e) {
-        console.log(`[Galaga/Client] ❌ JSON inválido de ${socketId}:`, rawStr);
-        return;
-      }
-
-      console.log(`[Galaga/Client] 📨 Tipo: "${msg.type}"`);
-
-      if (msg.type === "send-message") {
-        console.log(`[Galaga/Client] 📤 Jogador #${player.playerNumber} enviando: dataType="${msg.dataType}", jsonData="${msg.jsonData}"`);
-
-        if (!room.hostWs) {
-          console.log(`[Galaga/Client] ⚠ Host offline`);
-          return;
-        }
-
+      // Relay as playerMessage to host (matching C# HostClient protocol)
+      if (room.hostWs) {
+        console.log(`[Galaga/Client] 📤 Repassando para host como playerMessage`);
         send(room.hostWs, {
-          type: "receive-message",
-          from: socketId,
-          playerNumber: player.playerNumber,
-          dataType: msg.dataType,
-          jsonData: msg.jsonData,
-        });
-      }
-
-      if (msg.type === "send-input") {
-        if (!room.hostWs) return;
-
-        console.log(`[Galaga/Client] 🕹 Input jogador #${player.playerNumber}: x=${msg.x}, y=${msg.y}`);
-        send(room.hostWs, {
-          type: "receive-input",
-          from: socketId,
-          playerNumber: player.playerNumber,
-          x: msg.x,
-          y: msg.y,
-          buttons: msg.buttons,
+          type: "playerMessage",
+          playerId: playerId,
+          data: rawStr,
         });
       }
     });
 
     ws.on("close", (code, reason) => {
-      console.log(`[Galaga/Client] 🔴 Client desconectado: ${socketId} (code: ${code}, reason: ${reason.toString() || "N/A"})`);
+      console.log(`[Galaga/Client] 🔴 Jogador ${playerId} desconectou (code: ${code})`);
 
-      const removed = room.removePlayer(socketId);
+      const removed = room.removePlayer(playerIdStr);
       if (removed) {
-        console.log(`[Galaga/Client] 🗑 Jogador #${removed.playerNumber} removido da sala "${roomId}"`);
-        console.log(`[Galaga/Client] 📊 Jogadores restantes: ${room.playerCount()}`);
+        console.log(`[Galaga/Client] 🗑 Jogador removido. Restantes: ${room.playerCount()}`);
 
+        // Notify host: playerDisconnected (matching C# HostClient protocol)
         if (room.hostWs) {
-          console.log(`[Galaga/Client] 📤 Notificando host sobre player-left`);
+          console.log(`[Galaga/Client] 📤 Notificando host: playerDisconnected`);
           send(room.hostWs, {
-            type: "player-left",
-            playerId: socketId,
-            playerNumber: removed.playerNumber,
-            totalPlayers: room.playerCount(),
-            roomId,
+            type: "playerDisconnected",
+            playerId: playerId,
           });
         }
       }
     });
 
     ws.on("error", (err) => {
-      console.log(`[Galaga/Client] ❌ ERRO no WebSocket do client ${socketId}:`, err.message);
+      console.log(`[Galaga/Client] ❌ ERRO jogador ${playerId}:`, err.message);
     });
   });
 
@@ -263,12 +244,12 @@ export function setupGalaga(server: http.Server) {
     const pathname = (request.url || "").split("?")[0];
 
     if (pathname === "/galaga/host") {
-      console.log(`[Galaga] 🔌 Upgrade request para /galaga/host`);
+      console.log(`[Galaga] 🔌 Upgrade: /galaga/host`);
       hostWss.handleUpgrade(request, socket, head, (ws) => {
         hostWss.emit("connection", ws, request);
       });
     } else if (pathname === "/galaga/client") {
-      console.log(`[Galaga] 🔌 Upgrade request para /galaga/client`);
+      console.log(`[Galaga] 🔌 Upgrade: /galaga/client`);
       clientWss.handleUpgrade(request, socket, head, (ws) => {
         clientWss.emit("connection", ws, request);
       });

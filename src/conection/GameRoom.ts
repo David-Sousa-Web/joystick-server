@@ -11,8 +11,8 @@ interface PlayerInfo {
 export class GameRoom {
   readonly roomId: string;
   readonly gameType: GameType;
-  readonly minPlayers: number;
-  readonly maxPlayers: number;
+  minPlayers: number;
+  maxPlayers: number;
 
   hostSocketId: string;
   hostWs?: WebSocket;
@@ -65,5 +65,9 @@ export class GameRoom {
 
   playerCount(): number {
     return this.players.size;
+  }
+
+  setMaxPlayers(max: number) {
+    this.maxPlayers = max;
   }
 }
