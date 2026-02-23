@@ -243,13 +243,13 @@ export function setupGalaga(server: http.Server) {
   server.on("upgrade", (request, socket, head) => {
     const pathname = (request.url || "").split("?")[0];
 
-    if (pathname === "/galaga/host") {
-      console.log(`[Galaga] 🔌 Upgrade: /galaga/host`);
+    if (pathname === "/v1/galaga/host") {
+      console.log(`[Galaga] 🔌 Upgrade: /v1/galaga/host`);
       hostWss.handleUpgrade(request, socket, head, (ws) => {
         hostWss.emit("connection", ws, request);
       });
-    } else if (pathname === "/galaga/client") {
-      console.log(`[Galaga] 🔌 Upgrade: /galaga/client`);
+    } else if (pathname === "/v1/galaga/client") {
+      console.log(`[Galaga] 🔌 Upgrade: /v1/galaga/client`);
       clientWss.handleUpgrade(request, socket, head, (ws) => {
         clientWss.emit("connection", ws, request);
       });
