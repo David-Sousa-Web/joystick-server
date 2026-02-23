@@ -7,9 +7,22 @@ interface WsMessage {
   [key: string]: any;
 }
 
-function send(ws: WebSocket, data: WsMessage) {
+function sendJson(ws: WebSocket, data: any) {
   if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(data));
+    const json = JSON.stringify(data);
+    console.log(`[Pong] ⬆ ENVIANDO JSON:`, json);
+    ws.send(json);
+  } else {
+    console.log(`[Pong] ⚠ WebSocket não está aberto, mensagem descartada`);
+  }
+}
+
+function sendRaw(ws: WebSocket, data: string) {
+  if (ws.readyState === WebSocket.OPEN) {
+    console.log(`[Pong] ⬆ ENVIANDO RAW:`, data);
+    ws.send(data);
+  } else {
+    console.log(`[Pong] ⚠ WebSocket não está aberto, mensagem RAW descartada`);
   }
 }
 
@@ -27,23 +40,27 @@ export function setupPong(server: http.Server) {
   const hostWss = new WebSocketServer({ noServer: true });
   const clientWss = new WebSocketServer({ noServer: true });
 
+  console.log(`[Pong] ✅ Handlers registrados (/v1/pong/host e /v1/pong/client)`);
+
   // ═══════════════════════════════════════
-  // HOST — ws://host:port/pong/host?roomId=xxx
+  // HOST — ws://host:port/v1/pong/host?roomId=xxx
   // ═══════════════════════════════════════
   hostWss.on("connection", (ws, request) => {
-    const socketId = crypto.randomUUID();
     const roomId = getRoomIdFromUrl(request.url);
+    const socketId = crypto.randomUUID();
 
-    console.log(`[Pong/Host] 🟢 Host conectado: ${socketId}, roomId: "${roomId}"`);
+    console.log(`[Pong/Host] 🟢 Host conectado. roomId: "${roomId}"`);
 
     if (!roomId) {
-      send(ws, { type: "error", message: "roomId não informado. Use: /pong/host?roomId=xxx" });
+      console.log(`[Pong/Host] ❌ roomId não informado! Use: /v1/pong/host?roomId=xxx`);
+      sendJson(ws, { type: "error", message: "roomId não informado. Use: /v1/pong/host?roomId=xxx" });
       ws.close();
       return;
     }
 
     if (rooms.has(roomId)) {
-      send(ws, { type: "error", message: "Sala já existe." });
+      console.log(`[Pong/Host] ❌ Sala "${roomId}" já existe!`);
+      sendJson(ws, { type: "error", message: "Sala já existe." });
       ws.close();
       return;
     }
@@ -53,53 +70,94 @@ export function setupPong(server: http.Server) {
     room.hostWs = ws;
     rooms.set(roomId, room);
 
-    console.log(`[Pong/Host] ✅ Sala "${roomId}" criada automaticamente`);
-    send(ws, { type: "room-created", roomId });
+    console.log(`[Pong/Host] ✅ Sala "${roomId}" criada`);
+    console.log(`[Pong/Host] 📊 Total de salas ativas: ${rooms.size}`);
 
     ws.on("message", (raw) => {
+      const rawStr = raw.toString();
+      console.log(`[Pong/Host] ⬇ RECEBIDO:`, rawStr);
+
       let msg: WsMessage;
       try {
-        msg = JSON.parse(raw.toString());
-      } catch {
+        msg = JSON.parse(rawStr);
+      } catch (e) {
+        console.log(`[Pong/Host] ❌ JSON inválido:`, rawStr);
         return;
       }
 
-      if (msg.type === "send-to-player") {
-        const { playerId, dataType, jsonData } = msg;
+      console.log(`[Pong/Host] 📨 Tipo: "${msg.type}"`);
+
+      // Host is ready and sets maxPlayers
+      if (msg.type === "hostReady") {
+        if (msg.maxPlayers) {
+          room.setMaxPlayers(msg.maxPlayers);
+          console.log(`[Pong/Host] ✅ Host pronto. maxPlayers=${msg.maxPlayers}`);
+        }
+        sendJson(ws, { type: "room-created", roomId });
+      }
+
+      // Host sends data to a specific player (can be playerConnected or sendToPlayer)
+      if (msg.type === "sendToPlayer" || msg.type === "playerConnected") {
+        const playerId = String(msg.playerId);
+        console.log(`[Pong/Host] 📤 Enviando para jogador ${playerId}: "${msg.data}"`);
+
         const player = room.getPlayer(playerId);
+        // The Host relies on the server to send the raw string to the player.
+        // e.g., "Partida ja em andamento" or other instructions.
         if (player?.ws) {
-          send(player.ws, { type: "game-message", dataType, jsonData });
+          sendRaw(player.ws, msg.data || "");
+        } else {
+          console.log(`[Pong/Host] ⚠ Jogador ${playerId} NÃO encontrado na sala`);
         }
       }
 
-      if (msg.type === "send-to-all") {
+      // Host broadcasts to all players
+      if (msg.type === "sendToAll") {
+        console.log(`[Pong/Host] 📢 Broadcast (${room.playerCount()} jogadores): "${msg.data}"`);
         for (const [, player] of room.players) {
           if (player.ws) {
-            send(player.ws, { type: "game-message", dataType: msg.dataType, jsonData: msg.jsonData });
+            sendRaw(player.ws, msg.data || "");
           }
+        }
+      }
+
+      // Host disconnects a specific player
+      if (msg.type === "disconnectPlayer") {
+        const playerId = String(msg.playerId);
+        console.log(`[Pong/Host] 🔌 Host solicitou desconexão do jogador ${playerId}`);
+        const player = room.getPlayer(playerId);
+        if (player?.ws) {
+          player.ws.close();
         }
       }
     });
 
-    ws.on("close", () => {
-      console.log(`[Pong/Host] 🔴 Host desconectado, fechando sala "${roomId}"`);
+    ws.on("close", (code, reason) => {
+      console.log(`[Pong/Host] 🔴 Host desconectado (code: ${code})`);
+      console.log(`[Pong/Host] 🗑 Fechando sala "${roomId}"`);
+
       for (const [, player] of room.players) {
         if (player.ws) {
-          send(player.ws, { type: "game-message", dataType: "Reset", jsonData: "Host desconectou" });
+          // Send Reset to clients if host drops, actually, we'll just close their socket
+          // to trigger the connection reload logic in the JS client.
+          player.ws.close();
         }
       }
       rooms.delete(roomId);
+      console.log(`[Pong/Host] ✅ Sala removida. Salas ativas: ${rooms.size}`);
+    });
+
+    ws.on("error", (err) => {
+      console.log(`[Pong/Host] ❌ ERRO:`, err.message);
     });
   });
 
   // ═══════════════════════════════════════
-  // CLIENT — ws://host:port/pong/client
-  // Auto-joins the first available room
+  // CLIENT — ws://host:port/v1/pong/client
   // ═══════════════════════════════════════
   clientWss.on("connection", (ws, request) => {
-    const socketId = crypto.randomUUID();
-
-    console.log(`[Pong/Client] 🟢 Client conectado: ${socketId}`);
+    console.log(`[Pong/Client] 🟢 Client conectado`);
+    console.log(`[Pong/Client] 🔍 Procurando sala disponível...`);
 
     // Find first room with space
     let room: GameRoom | null = null;
@@ -113,84 +171,79 @@ export function setupPong(server: http.Server) {
     }
 
     if (!room || !roomId) {
-      send(ws, { type: "error", message: "Nenhuma sala disponível. Aguarde o host criar uma sala." });
+      console.log(`[Pong/Client] ❌ Nenhuma sala disponível`);
+      // Matches the "Partida ja em andamento" rejection in JS client if room doesn't exist.
+      // Or we just send a raw rejection string.
+      sendRaw(ws, "Partida ja em andamento");
       ws.close();
       return;
     }
 
-    // Auto-join room
-    const player = room.addPlayer(socketId);
+    // Find lowest available ID (0, 1, 2...)
+    let playerId = 0;
+    while (room.getPlayer(String(playerId))) {
+      playerId++;
+    }
+    const playerIdStr = String(playerId);
+
+    const player = room.addPlayer(playerIdStr);
     if (!player) {
-      send(ws, { type: "error", message: "Não foi possível entrar na sala." });
+      console.log(`[Pong/Client] ❌ Falha ao entrar na sala`);
       ws.close();
       return;
     }
 
     player.ws = ws;
 
-    console.log(`[Pong/Client] ✅ Jogador #${player.playerNumber} entrou na sala "${roomId}" (${room.playerCount()}/${room.maxPlayers})`);
+    console.log(`[Pong/Client] ✅ Jogador ${playerId} entrou na sala "${roomId}" (${room.playerCount()}/${room.maxPlayers})`);
 
-    send(ws, { type: "joined-room", roomId, playerNumber: player.playerNumber });
-    send(ws, { type: "game-message", dataType: "ID", jsonData: String(player.playerNumber) });
+    // The JS client expects the raw ID (0 or 1) as a string
+    sendRaw(ws, String(playerId));
 
+    // Notify host via JSON (matching C# protocol)
     if (room.hostWs) {
-      send(room.hostWs, {
-        type: "player-joined",
-        playerId: socketId,
-        playerNumber: player.playerNumber,
-        totalPlayers: room.playerCount(),
+      console.log(`[Pong/Client] 📤 Notificando host: playerConnected`);
+      sendJson(room.hostWs, {
+        type: "playerConnected",
+        playerId: playerId,
       });
-
-      // Pong requires 2 players
-      if (room.isReady()) {
-        send(room.hostWs, { type: "game-ready", roomId, players: room.playerCount() });
-      }
     }
 
     ws.on("message", (raw) => {
-      let msg: WsMessage;
-      try {
-        msg = JSON.parse(raw.toString());
-      } catch {
-        return;
-      }
+      const rawStr = raw.toString();
+      console.log(`[Pong/Client] ⬇ RECEBIDO de ${playerId}:`, rawStr);
 
-      if (msg.type === "send-message") {
-        if (!room.hostWs) return;
-        send(room.hostWs, {
-          type: "receive-message",
-          from: socketId,
-          playerNumber: player.playerNumber,
-          dataType: msg.dataType,
-          jsonData: msg.jsonData,
-        });
-      }
-
-      if (msg.type === "send-input") {
-        if (!room.hostWs) return;
-        send(room.hostWs, {
-          type: "receive-input",
-          from: socketId,
-          playerNumber: player.playerNumber,
-          x: msg.x,
-          y: msg.y,
-          buttons: msg.buttons,
+      // Relay as playerMessage to host
+      if (room && room.hostWs) {
+        console.log(`[Pong/Client] 📤 Repassando para host como playerMessage`);
+        sendJson(room.hostWs, {
+          type: "playerMessage",
+          playerId: playerId,
+          data: rawStr,
         });
       }
     });
 
-    ws.on("close", () => {
-      console.log(`[Pong/Client] 🔴 Jogador #${player.playerNumber} desconectou da sala "${roomId}"`);
-      const removed = room.removePlayer(socketId);
-      if (removed && room.hostWs) {
-        send(room.hostWs, {
-          type: "player-left",
-          playerId: socketId,
-          playerNumber: removed.playerNumber,
-          totalPlayers: room.playerCount(),
-          roomId,
-        });
+    ws.on("close", (code) => {
+      console.log(`[Pong/Client] 🔴 Jogador ${playerId} desconectou (code: ${code})`);
+
+      if (room) {
+        const removed = room.removePlayer(playerIdStr);
+        if (removed) {
+          console.log(`[Pong/Client] 🗑 Jogador removido. Restantes: ${room.playerCount()}`);
+          if (room.hostWs) {
+            console.log(`[Pong/Client] 📤 Notificando host: playerDisconnected`);
+            sendJson(room.hostWs, {
+              type: "playerDisconnected",
+              playerId: playerId,
+            });
+          }
+        }
       }
+    });
+
+    ws.on("error", (err) => {
+      console.log(`[Pong/Client] ❌ ERRO jogador ${playerId}:`, err.message);
     });
   });
 
@@ -198,11 +251,13 @@ export function setupPong(server: http.Server) {
   server.on("upgrade", (request, socket, head) => {
     const pathname = (request.url || "").split("?")[0];
 
-    if (pathname === "/pong/host") {
+    if (pathname === "/v1/pong/host") {
+      console.log(`[Pong] 🔌 Upgrade request para /v1/pong/host`);
       hostWss.handleUpgrade(request, socket, head, (ws) => {
         hostWss.emit("connection", ws, request);
       });
-    } else if (pathname === "/pong/client") {
+    } else if (pathname === "/v1/pong/client") {
+      console.log(`[Pong] 🔌 Upgrade request para /v1/pong/client`);
       clientWss.handleUpgrade(request, socket, head, (ws) => {
         clientWss.emit("connection", ws, request);
       });

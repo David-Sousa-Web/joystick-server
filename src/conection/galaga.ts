@@ -31,7 +31,7 @@ export function setupGalaga(server: http.Server) {
   const hostWss = new WebSocketServer({ noServer: true });
   const clientWss = new WebSocketServer({ noServer: true });
 
-  console.log(`[Galaga] ✅ Handlers registrados (/galaga/host e /galaga/client)`);
+  console.log(`[Galaga] ✅ Handlers registrados (/v1/galaga/host e /v1/galaga/client)`);
 
   // ═══════════════════════════════════════
   // HOST — ws://host:port/galaga/host?roomId=xxx
