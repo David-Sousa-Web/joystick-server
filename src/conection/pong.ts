@@ -172,9 +172,7 @@ export function setupPong(server: http.Server) {
 
     if (!room || !roomId) {
       console.log(`[Pong/Client] ❌ Nenhuma sala disponível`);
-      // Matches the "Partida ja em andamento" rejection in JS client if room doesn't exist.
-      // Or we just send a raw rejection string.
-      sendRaw(ws, "Partida ja em andamento");
+      sendRaw(ws, "Nenhuma sala disponivel");
       ws.close();
       return;
     }
