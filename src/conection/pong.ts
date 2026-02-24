@@ -9,20 +9,13 @@ interface WsMessage {
 
 function sendJson(ws: WebSocket, data: any) {
   if (ws.readyState === WebSocket.OPEN) {
-    const json = JSON.stringify(data);
-    console.log(`[Pong] ⬆ ENVIANDO JSON:`, json);
-    ws.send(json);
-  } else {
-    console.log(`[Pong] ⚠ WebSocket não está aberto, mensagem descartada`);
+    ws.send(JSON.stringify(data));
   }
 }
 
 function sendRaw(ws: WebSocket, data: string) {
   if (ws.readyState === WebSocket.OPEN) {
-    console.log(`[Pong] ⬆ ENVIANDO RAW:`, data);
     ws.send(data);
-  } else {
-    console.log(`[Pong] ⚠ WebSocket não está aberto, mensagem RAW descartada`);
   }
 }
 
@@ -75,17 +68,13 @@ export function setupPong(server: http.Server) {
 
     ws.on("message", (raw) => {
       const rawStr = raw.toString();
-      console.log(`[Pong/Host] ⬇ RECEBIDO:`, rawStr);
 
       let msg: WsMessage;
       try {
         msg = JSON.parse(rawStr);
       } catch (e) {
-        console.log(`[Pong/Host] ❌ JSON inválido:`, rawStr);
         return;
       }
-
-      console.log(`[Pong/Host] 📨 Tipo: "${msg.type}"`);
 
       // Host is ready and sets maxPlayers
       if (msg.type === "hostReady") {
@@ -113,7 +102,6 @@ export function setupPong(server: http.Server) {
 
       // Host broadcasts to all players
       if (msg.type === "sendToAll") {
-        console.log(`[Pong/Host] 📢 Broadcast (${room.playerCount()} jogadores): "${msg.data}"`);
         for (const [, player] of room.players) {
           if (player.ws) {
             sendRaw(player.ws, msg.data || "");
@@ -209,11 +197,9 @@ export function setupPong(server: http.Server) {
 
     ws.on("message", (raw) => {
       const rawStr = raw.toString();
-      console.log(`[Pong/Client] ⬇ RECEBIDO de ${playerId}:`, rawStr);
 
       // Relay as playerMessage to host
       if (room && room.hostWs) {
-        console.log(`[Pong/Client] 📤 Repassando para host como playerMessage`);
         sendJson(room.hostWs, {
           type: "playerMessage",
           playerId: playerId,
@@ -247,15 +233,15 @@ export function setupPong(server: http.Server) {
 
   // Route upgrade requests by path
   server.on("upgrade", (request, socket, head) => {
+    (socket as import("net").Socket).setNoDelay(true); // Disable Nagle's algorithm for low latency
+
     const pathname = (request.url || "").split("?")[0];
 
     if (pathname === "/v1/pong/host") {
-      console.log(`[Pong] 🔌 Upgrade request para /v1/pong/host`);
       hostWss.handleUpgrade(request, socket, head, (ws) => {
         hostWss.emit("connection", ws, request);
       });
     } else if (pathname === "/v1/pong/client") {
-      console.log(`[Pong] 🔌 Upgrade request para /v1/pong/client`);
       clientWss.handleUpgrade(request, socket, head, (ws) => {
         clientWss.emit("connection", ws, request);
       });

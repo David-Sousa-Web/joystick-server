@@ -9,11 +9,11 @@ interface WsMessage {
 
 function send(ws: WebSocket, data: any) {
   if (ws.readyState === WebSocket.OPEN) {
-    const json = JSON.stringify(data);
-    console.log(`[Galaga] ⬆ ENVIANDO:`, json);
-    ws.send(json);
-  } else {
-    console.log(`[Galaga] ⚠ WebSocket não está aberto, mensagem descartada`);
+    let toSend = data;
+    if (typeof data === "object") {
+      toSend = JSON.stringify(data);
+    }
+    ws.send(toSend);
   }
 }
 
@@ -66,17 +66,13 @@ export function setupGalaga(server: http.Server) {
 
     ws.on("message", (raw) => {
       const rawStr = raw.toString();
-      console.log(`[Galaga/Host] ⬇ RECEBIDO:`, rawStr);
 
       let msg: WsMessage;
       try {
         msg = JSON.parse(rawStr);
       } catch (e) {
-        console.log(`[Galaga/Host] ❌ JSON inválido:`, rawStr);
         return;
       }
-
-      console.log(`[Galaga/Host] 📨 Tipo: "${msg.type}"`);
 
       // Host is ready and sets maxPlayers
       if (msg.type === "hostReady") {
@@ -90,25 +86,20 @@ export function setupGalaga(server: http.Server) {
       // Host sends data to a specific player by relay ID
       if (msg.type === "sendToPlayer") {
         const playerId = String(msg.playerId);
-        console.log(`[Galaga/Host] 📤 Enviando para jogador ${playerId}: "${msg.data}"`);
 
         const player = room.getPlayer(playerId);
         if (player?.ws) {
-          console.log(`[Galaga/Host] ✅ Jogador encontrado (player #${player.playerNumber})`);
-          // Send raw data string, exactly as the C# game sends
-          player.ws.send(msg.data);
-        } else {
-          console.log(`[Galaga/Host] ⚠ Jogador ${playerId} NÃO encontrado`);
+          // Send raw data string, exactly as the C# game expects
+          send(player.ws, msg.data);
         }
       }
 
       // Host broadcasts to all players
       if (msg.type === "sendToAll") {
-        console.log(`[Galaga/Host] 📢 Broadcast (${room.playerCount()} jogadores): "${msg.data}"`);
         for (const [, player] of room.players) {
           if (player.ws) {
             // Send raw data string
-            player.ws.send(msg.data);
+            send(player.ws, msg.data);
           }
         }
       }
@@ -203,11 +194,9 @@ export function setupGalaga(server: http.Server) {
     // Client sends messages (raw strings or JSON) to relay to host
     ws.on("message", (raw) => {
       const rawStr = raw.toString();
-      console.log(`[Galaga/Client] ⬇ RECEBIDO de jogador ${playerId}:`, rawStr);
 
       // Relay as playerMessage to host (matching C# HostClient protocol)
       if (room.hostWs) {
-        console.log(`[Galaga/Client] 📤 Repassando para host como playerMessage`);
         send(room.hostWs, {
           type: "playerMessage",
           playerId: playerId,
@@ -241,15 +230,15 @@ export function setupGalaga(server: http.Server) {
 
   // Route upgrade requests by path
   server.on("upgrade", (request, socket, head) => {
+    (socket as import("net").Socket).setNoDelay(true); // Disable Nagle's algorithm for low latency
+
     const pathname = (request.url || "").split("?")[0];
 
     if (pathname === "/v1/galaga/host") {
-      console.log(`[Galaga] 🔌 Upgrade: /v1/galaga/host`);
       hostWss.handleUpgrade(request, socket, head, (ws) => {
         hostWss.emit("connection", ws, request);
       });
     } else if (pathname === "/v1/galaga/client") {
-      console.log(`[Galaga] 🔌 Upgrade: /v1/galaga/client`);
       clientWss.handleUpgrade(request, socket, head, (ws) => {
         clientWss.emit("connection", ws, request);
       });
