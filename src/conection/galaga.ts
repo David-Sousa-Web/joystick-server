@@ -191,12 +191,23 @@ export function setupGalaga(server: http.Server) {
       });
     }
 
-    // Client sends messages (raw strings or JSON) to relay to host
-    ws.on("message", (raw) => {
-      const rawStr = raw.toString();
+    // Client sends messages (raw strings, JSON, or Binary) to relay to host
+    ws.on("message", (data, isBinary) => {
+      // 1) Binary High-Performance Routing
+      if (isBinary && room.hostWs && room.hostWs.readyState === WebSocket.OPEN) {
+        const payload = data as Buffer;
+        // Host expects 6 bytes: [playerId_u16_le][type][seq][moveX][flags]
+        const hostPacket = Buffer.allocUnsafe(2 + payload.length);
+        hostPacket.writeUInt16LE(playerId, 0); // Prepend integer playerId
+        payload.copy(hostPacket, 2);           // Copy the 4-byte payload from client
 
-      // Relay as playerMessage to host (matching C# HostClient protocol)
-      if (room.hostWs) {
+        room.hostWs.send(hostPacket);
+        return;
+      }
+
+      // 2) String/JSON fallback for legacy events
+      const rawStr = data.toString();
+      if (room.hostWs && room.hostWs.readyState === WebSocket.OPEN) {
         send(room.hostWs, {
           type: "playerMessage",
           playerId: playerId,
